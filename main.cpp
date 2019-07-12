@@ -14,6 +14,7 @@ int main()
     std::mutex mutex_;
     std::condition_variable condVar;
     bool dataReady{false};
+    bool timeout{false};
 
     auto setDataReady = [&]()
     {
@@ -32,9 +33,9 @@ int main()
         int sub_mid;
         std::string topic = "topic";
         client_res.subscribe(&sub_mid, topic.c_str());
-        for (auto it = 0; it < 300; ++it)
+        auto start = std::chrono::steady_clock::now();
+        for (;;)
         {
-            std::this_thread::sleep_for(100ms);
             client_res.loop();
             {
                 std::lock_guard<std::mutex> lck(mutex_);
@@ -42,8 +43,14 @@ int main()
                 {
                     break;
                 }
+                else if (std::chrono::steady_clock::now() > start + 10s)
+                {
+                    timeout = !timeout;
+                    break;
+                }
             }
         }
+        condVar.notify_one();
     };
 
     std::thread t2(setDataReady);
@@ -52,8 +59,13 @@ int main()
     std::unique_lock<std::mutex> lck(mutex_);
     condVar.wait(lck, [&]
     {
-        return dataReady;
+        return dataReady || timeout;
     });   // (4)
+    if (timeout)
+    {
+        std::cout << "Timed Out " << std::endl;
+        std::_Exit(EXIT_FAILURE);
+    }
     std::cout << "Running " << std::endl;
 
     t2.join();
