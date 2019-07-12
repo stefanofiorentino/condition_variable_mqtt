@@ -1,40 +1,62 @@
 #include <condition_variable>
 #include <iostream>
 #include <thread>
+#include "mqtt.h"
 
 // https://www.modernescpp.com/index.php/c-core-guidelines-be-aware-of-the-traps-of-condition-variables
+// mosquitto_pub -t "topic" -m "NO"
+// mosquitto_pub -t "topic" -m "OK"
 
-std::mutex mutex_;
-std::condition_variable condVar;
+using namespace std::chrono_literals;
 
-bool dataReady{false};
+int main()
+{
+    std::mutex mutex_;
+    std::condition_variable condVar;
+    bool dataReady{false};
 
-void waitingForWork(){
+    auto setDataReady = [&]()
+    {
+        mqtt_client client_res("bt_bluetooth", "localhost", 60000, [&](std::string const &message)
+        {
+            if ("OK" == message)
+            {
+                {
+                    std::lock_guard<std::mutex> lck(mutex_);
+                    dataReady = true;
+                }
+                std::cout << "Data prepared" << std::endl;
+                condVar.notify_one();
+            }
+        });
+        int sub_mid;
+        std::string topic = "topic";
+        client_res.subscribe(&sub_mid, topic.c_str());
+        for (auto it = 0; it < 300; ++it)
+        {
+            std::this_thread::sleep_for(100ms);
+            client_res.loop();
+            {
+                std::lock_guard<std::mutex> lck(mutex_);
+                if (dataReady)
+                {
+                    break;
+                }
+            }
+        }
+    };
+
+    std::thread t2(setDataReady);
+
     std::cout << "Waiting " << std::endl;
     std::unique_lock<std::mutex> lck(mutex_);
-    condVar.wait(lck, []{ return dataReady; });   // (4)
-    std::cout << "Running " << std::endl;
-}
-
-void setDataReady(){
+    condVar.wait(lck, [&]
     {
-        std::lock_guard<std::mutex> lck(mutex_);
-        dataReady = true;
-    }
-    std::cout << "Data prepared" << std::endl;
-    condVar.notify_one();                        // (3)
-}
+        return dataReady;
+    });   // (4)
+    std::cout << "Running " << std::endl;
 
-int main(){
-
-    std::cout << std::endl;
-
-    std::thread t1(waitingForWork);               // (1)
-    std::thread t2(setDataReady);                 // (2)
-
-    t1.join();
     t2.join();
 
-    std::cout << std::endl;
-
+    return EXIT_SUCCESS;
 }
