@@ -18,7 +18,7 @@ int main()
 
     auto setDataReady = [&]()
     {
-        mqtt_client client_res("bt_bluetooth", "localhost", 60000, [&](std::string const &message)
+        mqtt_client client_res("bt_bluetooth_client", "localhost", 60000, [&](std::string const &message)
         {
             if ("OK" == message)
             {
@@ -53,9 +53,23 @@ int main()
         condVar.notify_one();
     };
 
-    std::thread t2(setDataReady);
+    std::thread client_response_thread(setDataReady);
 
     std::cout << "Waiting " << std::endl;
+
+    std::thread server_response_thread([]
+                                       {
+                                           mqtt_client server_res("bt_bluetooth_server", "localhost", 60000, nullptr);
+                                           int sub_mid;
+                                           std::string topic = "topic";
+                                           auto const &message = "OK";
+                                           std::this_thread::sleep_for(5s);
+                                           server_res.publish(&sub_mid, topic.c_str(), strlen(message), message);
+                                           server_res.loop();
+                                       });
+
+    server_response_thread.detach();
+
     std::unique_lock<std::mutex> lck(mutex_);
     condVar.wait(lck, [&]
     {
@@ -68,7 +82,14 @@ int main()
     }
     std::cout << "Running " << std::endl;
 
-    t2.join();
+    if (client_response_thread.joinable())
+    {
+        client_response_thread.join();
+    }
+    else
+    {
+        return EXIT_FAILURE;
+    }
 
     return EXIT_SUCCESS;
 }
