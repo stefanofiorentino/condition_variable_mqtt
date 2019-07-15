@@ -7,6 +7,10 @@
 // mosquitto_pub -t "topic" -m "NO"
 // mosquitto_pub -t "topic" -m "OK"
 
+void server_launcher();
+
+void client_launcher(std::condition_variable &condVar, std::mutex &mutex_, bool &dataReady, bool &timeout);
+
 using namespace std::chrono_literals;
 
 int main()
@@ -18,63 +22,20 @@ int main()
 
     auto setDataReady = [&]()
     {
-        mqtt_client client_res("bt_bluetooth_client", "localhost", 60000, [&](std::string const &message)
-        {
-            if ("OK" == message)
-            {
-                {
-                    std::lock_guard<std::mutex> lck(mutex_);
-                    dataReady = true;
-                }
-                std::cout << "Data prepared" << std::endl;
-                condVar.notify_one();
-            }
-        });
-        int sub_mid;
-        std::string topic = "topic";
-        client_res.subscribe(&sub_mid, topic.c_str());
-        auto start = std::chrono::steady_clock::now();
-        for (;;)
-        {
-            client_res.loop();
-            {
-                std::lock_guard<std::mutex> lck(mutex_);
-                if (dataReady)
-                {
-                    break;
-                }
-                else if (std::chrono::steady_clock::now() > start + 10s)
-                {
-                    timeout = !timeout;
-                    break;
-                }
-            }
-        }
-        condVar.notify_one();
+        client_launcher(condVar, mutex_, dataReady, timeout);
     };
 
     std::thread client_response_thread(setDataReady);
 
     std::cout << "Waiting " << std::endl;
 
-    std::thread server_response_thread([]
-                                       {
-                                           mqtt_client server_res("bt_bluetooth_server", "localhost", 60000, nullptr);
-                                           int sub_mid;
-                                           std::string topic = "topic";
-                                           auto const &message = "OK";
-                                           std::this_thread::sleep_for(5s);
-                                           server_res.publish(&sub_mid, topic.c_str(), strlen(message), message);
-                                           server_res.loop();
-                                       });
-
-    server_response_thread.detach();
+    server_launcher();
 
     std::unique_lock<std::mutex> lck(mutex_);
     condVar.wait(lck, [&]
     {
         return dataReady || timeout;
-    });   // (4)
+    });
     if (timeout)
     {
         std::cout << "Timed Out " << std::endl;
@@ -92,4 +53,57 @@ int main()
     }
 
     return EXIT_SUCCESS;
+}
+
+void client_launcher(std::condition_variable &condVar, std::mutex &mutex_, bool &dataReady, bool &timeout)
+{
+    mqtt_client client_res("bt_bluetooth_client", "localhost", 60000, [&](std::string const &message)
+    {
+        if ("OK" == message)
+        {
+            {
+                std::lock_guard<std::mutex> lck(mutex_);
+                dataReady = true;
+            }
+            std::cout << "Data prepared" << std::endl;
+            condVar.notify_one();
+        }
+    });
+    int sub_mid;
+    std::string topic = "topic";
+    client_res.subscribe(&sub_mid, topic.c_str());
+    auto start = std::chrono::steady_clock::now();
+    for (;;)
+    {
+        client_res.loop();
+        {
+            std::lock_guard<std::mutex> lck(mutex_);
+            if (dataReady)
+            {
+                break;
+            }
+            else if (std::chrono::steady_clock::now() > start + 10s)
+            {
+                timeout = !timeout;
+                break;
+            }
+        }
+    }
+    condVar.notify_one();
+}
+
+void server_launcher()
+{
+    std::thread server_response_thread([]
+                                       {
+                                           mqtt_client server_res("bt_bluetooth_server", "localhost", 60000, nullptr);
+                                           int sub_mid;
+                                           std::string topic = "topic";
+                                           auto const &message = "OK";
+                                           std::this_thread::sleep_for(5s);
+                                           server_res.publish(&sub_mid, topic.c_str(), strlen(message), message);
+                                           server_res.loop();
+                                       });
+
+    server_response_thread.detach();
 }
